@@ -72,6 +72,36 @@ VERMELHO_MINA = (200, 50, 30)
 MARROM_REVENGER = (130, 65, 25)
 AZUL_SOBREVIVENTE = (70, 130, 180)
 
+# Cores do Menu Pacífico
+AZUL_CEU = (210, 230, 245)
+VERDE_GRAMA = (120, 190, 110)
+AZUL_JOGADOR_MENU = (80, 100, 120)
+
+# ==========================================
+# CARREGAMENTO DE ASSETS
+# ==========================================
+frames_disparador_normal = []
+frames_disparador_mira = []
+
+try:
+    sprite_disparador_sheet = pygame.image.load('Assets/Sprites/disparador.png').convert_alpha()
+    LARGURA_FRAME, ALTURA_FRAME = 64, 64
+
+    for i in range(4):
+        frame = sprite_disparador_sheet.subsurface((i * LARGURA_FRAME, 0, LARGURA_FRAME, ALTURA_FRAME))
+        frame_redim = pygame.transform.scale(frame, (32, 32))
+        frames_disparador_normal.append(frame_redim)
+
+    for i in range(4):
+        frame = sprite_disparador_sheet.subsurface((i * LARGURA_FRAME, ALTURA_FRAME, LARGURA_FRAME, ALTURA_FRAME))
+        frame_redim = pygame.transform.scale(frame, (32, 32))
+        frames_disparador_mira.append(frame_redim)
+except Exception as e:
+    print(f"Aviso: Sprite do Disparador não encontrado em Assets/Sprites/disparador.png ({e})")
+
+index_anim_disparador = 0
+timer_anim_disparador = 0
+
 # ==========================================
 # 3. LINHAS E VARIÁVEIS DO JOGO
 # ==========================================
@@ -119,8 +149,12 @@ INTERVALO_MODIFICADOR = 1000
 proximo_gatilho_pontos = PRIMEIRO_GATILHO
 
 game_over = False
-# O ESTADO INICIAL AGORA É 'MENU'
 estado_jogo = 'MENU'
+
+# Variáveis de Transição Animada
+DURACAO_TRANSICAO = 90
+timer_transicao = 0
+pos_caos_transicao = -50.0
 
 TODOS_MODIFICADORES = [
     'DISPARADOR',
@@ -192,11 +226,7 @@ mestre_cumpriu_acao = False
 FRASES_MESTRE = [
     {'texto': 'O Mestre mandou pular!', 'acao': 'PULAR', 'valido': True},
     {'texto': 'O Mestre mandou deslizar!', 'acao': 'DESLIZAR', 'valido': True},
-    {
-        'texto': 'O Mestre mandou mudar de linha!',
-        'acao': 'MOVER',
-        'valido': True,
-    },
+    {'texto': 'O Mestre mandou mudar de linha!', 'acao': 'MOVER', 'valido': True},
     {'texto': 'Mude de Linha!', 'acao': 'MOVER', 'valido': False},
     {'texto': 'Pule!', 'acao': 'PULAR', 'valido': False},
     {'texto': 'Deslize!', 'acao': 'DESLIZAR', 'valido': False},
@@ -219,7 +249,7 @@ def reiniciar_todas_variaveis():
     global estado_lovers, robert_ativo, las_pragas_ativo, caranguejo_mina_ativo
     global revenger_ativo, sobreviventes_ativo, revenger_estado, revenger_angulo
     global mestre_ativo, mestre_ordem_ativa, mestre_estado, barra_amaldicoada_ativa
-    global barra_amaldicoada_nivel
+    global barra_amaldicoada_nivel, pos_caos_transicao
 
     game_over = False
     animando_consumo = False
@@ -227,11 +257,12 @@ def reiniciar_todas_variaveis():
     tempo_invencivel = 0
     debuff_movimento_timer = 0
     alcance_destruicao_atual = 12.0
+    pos_caos_transicao = -60.0
     pontos = 0
     acumulador_pontos = 0.0
     proximo_gatilho_pontos = PRIMEIRO_GATILHO
     velocidade_jogo = velocidade_base
-    player_offset_x = 100
+    player_offset_x = 30
     linha_atual = 1
     obstaculos.clear()
     coxinhas.clear()
@@ -291,6 +322,12 @@ while True:
     relogio.tick(60)
     teclas = pygame.key.get_pressed()
 
+    # Animação do Disparador
+    timer_anim_disparador += 1
+    if timer_anim_disparador >= 8:
+        index_anim_disparador = (index_anim_disparador + 1) % 4
+        timer_anim_disparador = 0
+
     acao_jogador_frame = None
 
     for evento in pygame.event.get():
@@ -301,9 +338,10 @@ while True:
         if evento.type == pygame.KEYDOWN:
             if estado_jogo == 'MENU':
                 if evento.key == pygame.K_SPACE or evento.key == pygame.K_RETURN:
+                    estado_jogo = 'TRANSICAO'
+                    timer_transicao = DURACAO_TRANSICAO
                     reiniciar_todas_variaveis()
-                    estado_jogo = 'CORRIDA'
-            elif not game_over:
+            elif not game_over and estado_jogo != 'TRANSICAO':
                 if (
                     evento.key == pygame.K_UP or evento.key == pygame.K_w
                 ) and linha_atual > 0:
@@ -327,10 +365,23 @@ while True:
                     vel_pulo = -5.5
                     acao_jogador_frame = 'PULAR'
             else:
-                if evento.key == pygame.K_r:
+                if evento.key == pygame.K_r and game_over:
                     estado_jogo = 'MENU'
 
-    if estado_jogo != 'MENU' and not game_over:
+    # LÓGICA DA TRANSIÇÃO ANIMADA
+    if estado_jogo == 'TRANSICAO':
+        timer_transicao -= 1
+        chao_offset = (chao_offset + 2.0) % 20
+        player_offset_x += 1.1
+
+        if timer_transicao < 65:
+            pos_caos_transicao += 1.8
+
+        if timer_transicao <= 0:
+            alcance_destruicao_atual = max(12.0, pos_caos_transicao)
+            estado_jogo = 'CORRIDA'
+
+    if estado_jogo not in ['MENU', 'TRANSICAO'] and not game_over:
         chao_offset = (chao_offset + velocidade_jogo) % 20
 
         if tempo_invencivel > 0:
@@ -532,7 +583,7 @@ while True:
                 velocidade_jogo = velocidade_base
                 estado_jogo = 'CORRIDA'
 
-        # SOBREVIVENTES LOGIC & SPAWN (LINHAS ADJACENTES E SUAVES)
+        # SOBREVIVENTES LOGIC & SPAWN
         if sobreviventes_ativo and not animando_consumo:
             tempo_proximo_sobrevivente -= 1
             if tempo_proximo_sobrevivente <= 0:
@@ -994,37 +1045,42 @@ while True:
     tela_interna.fill(PRETO)
 
     if estado_jogo == 'MENU':
-        # --- RENDERIZAÇÃO TELA DE MENU ---
+        tela_interna.fill(AZUL_CEU)
+
         for y in LINHAS_Y:
-            pygame.draw.line(
-                tela_interna, (20, 20, 30), (0, y), (LARGURA, y), 1
-            )
+            pygame.draw.line(tela_interna, VERDE_GRAMA, (0, y), (LARGURA, y), 2)
+
+        y_menu_player = LINHAS_Y[1] - player_altura_normal
+        rect_player_menu = pygame.Rect(
+            30, y_menu_player, player_largura, player_altura_normal
+        )
+        pygame.draw.rect(tela_interna, AZUL_JOGADOR_MENU, rect_player_menu)
 
         fonte_titulo = pygame.font.SysFont(None, 26, bold=True)
         fonte_sub = pygame.font.SysFont(None, 14)
-        fonte_info = pygame.font.SysFont(None, 12)
+        fonte_info = pygame.font.SysFont(None, 11)
 
-        txt_titulo = fonte_titulo.render('INSANE RUNNER', True, ROXO_CAOS)
-        txt_sub = fonte_sub.render(
-            'PRESSIONE ESPAÇO PARA COMECAR', True, BRANCO
-        )
+        txt_titulo = fonte_titulo.render('INSANE RUNNER', True, PRETO)
+        txt_sub = fonte_sub.render('PRESSIONE ESPAÇO PARA COMEÇAR', True, PRETO)
 
         txt_ctrl1 = fonte_info.render(
-            'W/S ou SETAS : Trocar Linha', True, CINZA_JOGADOR
+            'W/S ou SETAS : Trocar de Linha', True, (60, 60, 70)
         )
-        txt_ctrl2 = fonte_info.render('ESPAÇO : Pular', True, CINZA_JOGADOR)
-        txt_ctrl3 = fonte_info.render(
-            'SHIFT / C : Deslizar', True, CINZA_JOGADOR
+        txt_ctrl2 = fonte_info.render(
+            'A/D ou SETAS LATERAIS : Mover-se', True, (60, 60, 70)
+        )
+        txt_ctrl3 = fonte_info.render('ESPAÇO : Pular', True, (60, 60, 70))
+        txt_ctrl4 = fonte_info.render(
+            'SHIFT / C : Deslizar', True, (60, 60, 70)
         )
 
         tela_interna.blit(
-            txt_titulo, (LARGURA // 2 - txt_titulo.get_width() // 2, 35)
+            txt_titulo, (LARGURA // 2 - txt_titulo.get_width() // 2, 20)
         )
 
-        # Efeito piscante no texto de início
         if (pygame.time.get_ticks() // 400) % 2 == 0:
             tela_interna.blit(
-                txt_sub, (LARGURA // 2 - txt_sub.get_width() // 2, 75)
+                txt_sub, (LARGURA // 2 - txt_sub.get_width() // 2, 50)
             )
 
         tela_interna.blit(
@@ -1036,9 +1092,61 @@ while True:
         tela_interna.blit(
             txt_ctrl3, (LARGURA // 2 - txt_ctrl3.get_width() // 2, 145)
         )
+        tela_interna.blit(
+            txt_ctrl4, (LARGURA // 2 - txt_ctrl4.get_width() // 2, 160)
+        )
+
+    elif estado_jogo == 'TRANSICAO':
+        progresso = (DURACAO_TRANSICAO - timer_transicao) / float(
+            DURACAO_TRANSICAO
+        )
+
+        fundo_r = int(AZUL_CEU[0] * (1.0 - progresso) + PRETO[0] * progresso)
+        fundo_g = int(AZUL_CEU[1] * (1.0 - progresso) + PRETO[1] * progresso)
+        fundo_b = int(AZUL_CEU[2] * (1.0 - progresso) + PRETO[2] * progresso)
+
+        if 60 <= timer_transicao <= 68 and (timer_transicao // 2) % 2 == 0:
+            tela_interna.fill(ROXO_CAOS)
+        else:
+            tela_interna.fill((fundo_r, fundo_g, fundo_b))
+
+        for y in LINHAS_Y:
+            for x in range(-20 + int(-chao_offset), LARGURA + 20, 20):
+                pygame.draw.line(
+                    tela_interna, (60, 60, 75), (x, y), (x + 8, y), 1
+                )
+
+        if pos_caos_transicao > -40:
+            largura_caos = int(pos_caos_transicao)
+            if largura_caos > 0:
+                pygame.draw.rect(
+                    tela_interna, DESTRUICAO_PRETO, (0, 0, largura_caos, ALTURA)
+                )
+                pygame.draw.line(
+                    tela_interna,
+                    ROXO_CAOS,
+                    (largura_caos, 0),
+                    (largura_caos, ALTURA),
+                    3,
+                )
+                for i in range(0, ALTURA, 10):
+                    offset = random.randint(0, 4)
+                    pygame.draw.rect(
+                        tela_interna,
+                        ROXO_ESCURO,
+                        (largura_caos - 4 + offset, i, 4, 5),
+                    )
+
+        y_trans_player = LINHAS_Y[1] - player_altura_normal
+        rect_trans_player = pygame.Rect(
+            player_offset_x,
+            y_trans_player,
+            player_largura,
+            player_altura_normal,
+        )
+        pygame.draw.rect(tela_interna, CINZA_JOGADOR, rect_trans_player)
 
     else:
-        # --- RENDERIZAÇÃO DO JOGO (CORRIDA / SELEÇÃO) ---
         limite_caos = alcance_destruicao_atual + pulso_caos
 
         # CAMADA 0: Pistas
@@ -1051,7 +1159,6 @@ while True:
                     tela_interna, (50, 50, 65), (x, y), (x + 8, y), 1
                 )
 
-        # Alerta de linha Revenger
         if (
             revenger_estado in ['ALERTA', 'RECUO_ANTECIPACAO']
             and not animando_consumo
@@ -1119,17 +1226,18 @@ while True:
                     cor_sob = AZUL_SOBREVIVENTE
                     pygame.draw.rect(tela_interna, cor_sob, rect_sob)
 
-            # Disparador
+            # Disparador (Sprite Sheet Render)
             if disparador_ativo:
-                cor_disp = (
-                    ROXO_CAOS if (LARGURA - 25) <= limite_caos else (80, 20, 30)
-                )
-                pygame.draw.rect(
-                    tela_interna, cor_disp, (LARGURA - 25, 25, 12, 18)
-                )
-                pygame.draw.circle(
-                    tela_interna, VERMELHO, (LARGURA - 19, 30), 3
-                )
+                if frames_disparador_normal and frames_disparador_mira:
+                    if estado_disparo in ['SEGUINDO', 'TRAVADO_PISCANDO', 'ATIRANDO']:
+                        sprite_atual = frames_disparador_mira[index_anim_disparador]
+                    else:
+                        sprite_atual = frames_disparador_normal[index_anim_disparador]
+                    tela_interna.blit(sprite_atual, (LARGURA - 35, 15))
+                else:
+                    cor_disp = ROXO_CAOS if (LARGURA - 25) <= limite_caos else (80, 20, 30)
+                    pygame.draw.rect(tela_interna, cor_disp, (LARGURA - 25, 25, 12, 18))
+                    pygame.draw.circle(tela_interna, VERMELHO, (LARGURA - 19, 30), 3)
 
             # Obstáculos
             for obs in obstaculos:

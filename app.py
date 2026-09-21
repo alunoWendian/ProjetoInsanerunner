@@ -72,35 +72,77 @@ VERMELHO_MINA = (200, 50, 30)
 MARROM_REVENGER = (130, 65, 25)
 AZUL_SOBREVIVENTE = (70, 130, 180)
 
-# Cores do Menu Pacífico
 AZUL_CEU = (210, 230, 245)
 VERDE_GRAMA = (120, 190, 110)
 AZUL_JOGADOR_MENU = (80, 100, 120)
 
 # ==========================================
-# CARREGAMENTO DE ASSETS
+# CARREGAMENTO DE ASSETS (DISPARADOR E MIRA)
 # ==========================================
 frames_disparador_normal = []
 frames_disparador_mira = []
+frames_mira_disparador = []
 
+# Asset 1: Disparador
 try:
-    sprite_disparador_sheet = pygame.image.load('Assets/Sprites/disparador.png').convert_alpha()
-    LARGURA_FRAME, ALTURA_FRAME = 64, 64
+    sprite_disparador_sheet = pygame.image.load(
+        'Assets/Sprites/disparador.png'
+    ).convert_alpha()
+    w_sheet = sprite_disparador_sheet.get_width()
+    h_sheet = sprite_disparador_sheet.get_height()
 
-    for i in range(4):
-        frame = sprite_disparador_sheet.subsurface((i * LARGURA_FRAME, 0, LARGURA_FRAME, ALTURA_FRAME))
-        frame_redim = pygame.transform.scale(frame, (32, 32))
-        frames_disparador_normal.append(frame_redim)
+    # Cada frame tem 1/4 da largura e 1/2 da altura total da folha
+    w_frame = w_sheet // 4
+    h_frame = h_sheet // 2
 
+    # ESCALA MANTENDO PROPORÇÃO ORIGINAL (Ex: 0.5 para dar profundidade na HUD)
+    ESCALA_DISPARADOR = 0.5
+    largura_reduzida = int(w_frame * ESCALA_DISPARADOR)
+    altura_reduzida = int(h_frame * ESCALA_DISPARADOR)
+
+    # Linha 0 (Neutra - Sem Olho Vermelho)
     for i in range(4):
-        frame = sprite_disparador_sheet.subsurface((i * LARGURA_FRAME, ALTURA_FRAME, LARGURA_FRAME, ALTURA_FRAME))
-        frame_redim = pygame.transform.scale(frame, (32, 32))
-        frames_disparador_mira.append(frame_redim)
+        sub = sprite_disparador_sheet.subsurface(
+            (i * w_frame, 0, w_frame, h_frame)
+        )
+        frames_disparador_normal.append(
+            pygame.transform.scale(sub, (largura_reduzida, altura_reduzida))
+        )
+
+    # Linha 1 (Mirando / Atacando - Com Olho Vermelho)
+    for i in range(4):
+        sub = sprite_disparador_sheet.subsurface(
+            (i * w_frame, h_frame, w_frame, h_frame)
+        )
+        frames_disparador_mira.append(
+            pygame.transform.scale(sub, (largura_reduzida, altura_reduzida))
+        )
+
 except Exception as e:
-    print(f"Aviso: Sprite do Disparador não encontrado em Assets/Sprites/disparador.png ({e})")
+    print(f'Aviso: Erro ao carregar Assets/Sprites/disparador.png ({e})')
 
-index_anim_disparador = 0
-timer_anim_disparador = 0
+# Asset 2: Mira do Disparador (1.5x Maior)
+try:
+    sprite_mira_sheet = pygame.image.load(
+        'Assets/Sprites/MiraDisparador.png'
+    ).convert_alpha()
+    w_mira = sprite_mira_sheet.get_width()
+    h_frame_mira = sprite_mira_sheet.get_height() // 4
+
+    ESCALA_MIRA = 1.5
+    NOVA_LARGURA_MIRA = int(w_mira * ESCALA_MIRA)
+    NOVA_ALTURA_MIRA = int(h_frame_mira * ESCALA_MIRA)
+
+    for i in range(4):
+        sub_mira = sprite_mira_sheet.subsurface(
+            (0, i * h_frame_mira, w_mira, h_frame_mira)
+        )
+        mira_escalada = pygame.transform.scale(
+            sub_mira, (NOVA_LARGURA_MIRA, NOVA_ALTURA_MIRA)
+        )
+        frames_mira_disparador.append(mira_escalada)
+except Exception as e:
+    print(f'Aviso: Erro ao carregar Assets/Sprites/MiraDisparador.png ({e})')
 
 # ==========================================
 # 3. LINHAS E VARIÁVEIS DO JOGO
@@ -151,7 +193,6 @@ proximo_gatilho_pontos = PRIMEIRO_GATILHO
 game_over = False
 estado_jogo = 'MENU'
 
-# Variáveis de Transição Animada
 DURACAO_TRANSICAO = 90
 timer_transicao = 0
 pos_caos_transicao = -50.0
@@ -199,7 +240,7 @@ mira_x, mira_y = 0, 0
 temporizador_disparo = 0
 estado_disparo = 'DESATIVADO'
 tempo_piscada = 0
-angulo_mira = 0
+frame_disparador_counter = 0  # Contador contínuo para a animação do disparador
 
 lovers_ativa = False
 lovers_x, lovers_y = 0, 0
@@ -245,7 +286,7 @@ def reiniciar_todas_variaveis():
     global alcance_destruicao_atual, pontos, acumulador_pontos, proximo_gatilho_pontos
     global velocidade_jogo, player_offset_x, linha_atual, tempo_proximo_obstaculo
     global tempo_proxima_coxinha, tempo_proximo_sobrevivente, timer_proxima_afiada
-    global boost_deslize, disparador_ativo, estado_disparo, angulo_mira, lovers_ativa
+    global boost_deslize, disparador_ativo, estado_disparo, lovers_ativa
     global estado_lovers, robert_ativo, las_pragas_ativo, caranguejo_mina_ativo
     global revenger_ativo, sobreviventes_ativo, revenger_estado, revenger_angulo
     global mestre_ativo, mestre_ordem_ativa, mestre_estado, barra_amaldicoada_ativa
@@ -277,7 +318,7 @@ def reiniciar_todas_variaveis():
 
     disparador_ativo = False
     estado_disparo = 'DESATIVADO'
-    angulo_mira = 0
+
     lovers_ativa = False
     estado_lovers = 'DESATIVADO'
     robert_ativo = False
@@ -322,11 +363,10 @@ while True:
     relogio.tick(60)
     teclas = pygame.key.get_pressed()
 
-    # Animação do Disparador
-    timer_anim_disparador += 1
-    if timer_anim_disparador >= 8:
-        index_anim_disparador = (index_anim_disparador + 1) % 4
-        timer_anim_disparador = 0
+    # Atualiza o contador geral de frames da animação
+    frame_disparador_counter += 1
+    # Muda o frame da spritesheet a cada 8 ticks do Pygame
+    idx_disp_anim = (frame_disparador_counter // 8) % 4
 
     acao_jogador_frame = None
 
@@ -368,7 +408,6 @@ while True:
                 if evento.key == pygame.K_r and game_over:
                     estado_jogo = 'MENU'
 
-    # LÓGICA DA TRANSIÇÃO ANIMADA
     if estado_jogo == 'TRANSICAO':
         timer_transicao -= 1
         chao_offset = (chao_offset + 2.0) % 20
@@ -433,7 +472,6 @@ while True:
                 altura_pulo = 0
                 pulo = False
 
-        # BARRA AMALDIÇOADA
         if barra_amaldicoada_ativa and not animando_consumo:
             barra_amaldicoada_nivel += barra_amaldicoada_velocidade
 
@@ -452,7 +490,6 @@ while True:
                 })
                 tempo_proxima_coxinha = random.randint(150, 300)
 
-        # CORRIDA
         if estado_jogo == 'CORRIDA':
             if velocidade_jogo < velocidade_maxima:
                 velocidade_jogo += aceleracao_por_frame
@@ -533,7 +570,6 @@ while True:
                     max(30, intervalo_min), max(60, intervalo_max)
                 )
 
-        # SELEÇÃO
         elif estado_jogo == 'SELECAO':
             grade_x -= 1.2
 
@@ -583,7 +619,6 @@ while True:
                 velocidade_jogo = velocidade_base
                 estado_jogo = 'CORRIDA'
 
-        # SOBREVIVENTES LOGIC & SPAWN
         if sobreviventes_ativo and not animando_consumo:
             tempo_proximo_sobrevivente -= 1
             if tempo_proximo_sobrevivente <= 0:
@@ -674,7 +709,6 @@ while True:
                 if sob['x'] > LARGURA + 30:
                     sobreviventes.remove(sob)
 
-        # COXINHAS
         for coxinha in coxinhas[:]:
             coxinha['x'] -= velocidade_jogo
 
@@ -699,7 +733,6 @@ while True:
             if coxinha['x'] < -20:
                 coxinhas.remove(coxinha)
 
-        # OBSTÁCULOS
         for obs in obstaculos[:]:
             obs['x'] -= velocidade_jogo
 
@@ -757,7 +790,6 @@ while True:
                 if obs in obstaculos:
                     obstaculos.remove(obs)
 
-        # REVENGER
         if revenger_ativo and not animando_consumo:
             revenger_tempo_flutuando += 0.1
 
@@ -854,7 +886,6 @@ while True:
                     revenger_estado = 'FLUTUANDO'
                     revenger_timer = random.randint(180, 300)
 
-        # AFIADA
         for afiada in afiadas:
             if not animando_consumo:
                 afiada['x'] += afiada['vel_x']
@@ -882,7 +913,6 @@ while True:
                 if rect_player.colliderect(rect_afiada):
                     tomar_dano()
 
-        # O MESTRE
         if mestre_ativo and not animando_consumo:
             if not mestre_ordem_ativa:
                 mestre_timer -= 1
@@ -928,7 +958,7 @@ while True:
                         mestre_ordem_ativa = False
                         mestre_timer = random.randint(350, 550)
 
-        # DISPARADOR
+        # LÓGICA DO DISPARADOR
         if disparador_ativo and not animando_consumo:
             temporizador_disparo -= 1
 
@@ -940,13 +970,11 @@ while True:
             elif estado_disparo == 'SEGUINDO':
                 mira_x += (rect_player.centerx - mira_x) * 0.12
                 mira_y += (rect_player.centery - mira_y) * 0.12
-                angulo_mira = (angulo_mira + 8) % 360
 
                 if temporizador_disparo <= 0:
                     estado_disparo = 'TRAVADO_PISCANDO'
                     temporizador_disparo = 35
                     tempo_piscada = 0
-                    angulo_mira = 0
 
             elif estado_disparo == 'TRAVADO_PISCANDO':
                 tempo_piscada += 1
@@ -954,14 +982,13 @@ while True:
                     estado_disparo = 'ATIRANDO'
 
             elif estado_disparo == 'ATIRANDO':
-                rect_mira = pygame.Rect(mira_x - 9, mira_y - 9, 18, 18)
+                rect_mira = pygame.Rect(mira_x - 12, mira_y - 12, 24, 24)
                 if rect_player.colliderect(rect_mira):
                     tomar_dano()
 
                 estado_disparo = 'DESATIVADO'
                 temporizador_disparo = random.randint(120, 220)
 
-        # LOVERS.EXE
         if lovers_ativa and not animando_consumo:
             timer_lovers -= 1
 
@@ -1025,7 +1052,6 @@ while True:
                     estado_lovers = 'DESATIVADO'
                     timer_lovers = random.randint(140, 240)
 
-        # CAOS LOGIC
         if not animando_consumo:
             alvo_destruicao = 12 + (tropecos * 35)
             alcance_destruicao_atual += (
@@ -1149,7 +1175,6 @@ while True:
     else:
         limite_caos = alcance_destruicao_atual + pulso_caos
 
-        # CAMADA 0: Pistas
         for y in LINHAS_Y:
             pygame.draw.line(
                 tela_interna, (30, 30, 40), (0, y), (LARGURA, y), 1
@@ -1169,7 +1194,6 @@ while True:
                     tela_interna, (100, 30, 10), (0, y_aviso, LARGURA, 12)
                 )
 
-        # CAMADA 1: O Caos
         largura_visivel = int(limite_caos)
         if largura_visivel > 0:
             pygame.draw.rect(
@@ -1190,9 +1214,7 @@ while True:
                     (largura_visivel - 6 + offset_fogo, i, 4, 6),
                 )
 
-        # CAMADA 2: Entidades
         if not game_over and not animando_consumo:
-            # Coxinhas
             for coxinha in coxinhas:
                 y_coxinha = LINHAS_Y[coxinha['linha']] - coxinha['altura'] - 4
                 cor_c = (
@@ -1208,7 +1230,6 @@ while True:
                     ],
                 )
 
-            # Sobreviventes
             for sob in sobreviventes:
                 h_sob = (
                     player_altura_deslize
@@ -1226,20 +1247,21 @@ while True:
                     cor_sob = AZUL_SOBREVIVENTE
                     pygame.draw.rect(tela_interna, cor_sob, rect_sob)
 
-            # Disparador (Sprite Sheet Render)
+            # RENDERIZAÇÃO CORRIGIDA DO DISPARADOR NA HUD
             if disparador_ativo:
                 if frames_disparador_normal and frames_disparador_mira:
-                    if estado_disparo in ['SEGUINDO', 'TRAVADO_PISCANDO', 'ATIRANDO']:
-                        sprite_atual = frames_disparador_mira[index_anim_disparador]
+                    # Seleção da lista de frames baseada na fase de ataque
+                    if estado_disparo in [
+                        'SEGUINDO',
+                        'TRAVADO_PISCANDO',
+                        'ATIRANDO',
+                    ]:
+                        sprite_atual = frames_disparador_mira[idx_disp_anim]
                     else:
-                        sprite_atual = frames_disparador_normal[index_anim_disparador]
-                    tela_interna.blit(sprite_atual, (LARGURA - 35, 15))
-                else:
-                    cor_disp = ROXO_CAOS if (LARGURA - 25) <= limite_caos else (80, 20, 30)
-                    pygame.draw.rect(tela_interna, cor_disp, (LARGURA - 25, 25, 12, 18))
-                    pygame.draw.circle(tela_interna, VERMELHO, (LARGURA - 19, 30), 3)
+                        sprite_atual = frames_disparador_normal[idx_disp_anim]
 
-            # Obstáculos
+                    tela_interna.blit(sprite_atual, (LARGURA - 38, 5))
+
             for obs in obstaculos:
                 y_visivel_base = obs['y_atual'] - obs['offset_y']
                 no_caos = obs['x'] <= limite_caos
@@ -1341,7 +1363,6 @@ while True:
                         (int(post_it_x + 5), int(post_it_y + 4)), PRETO
                     )
 
-            # Revenger
             if revenger_estado in [
                 'FLUTUANDO',
                 'ALERTA',
@@ -1413,7 +1434,6 @@ while True:
                 else:
                     tela_interna.blit(surf_revenger, (revenger_x, revenger_y))
 
-            # Jogador
             if tempo_invencivel == 0 or (tempo_invencivel // 4) % 2 == 0:
                 no_caos_player = player_offset_x <= limite_caos
                 cor_player = ROXO_CAOS if no_caos_player else CINZA_JOGADOR
@@ -1426,7 +1446,6 @@ while True:
                 if no_caos_player:
                     pygame.draw.rect(tela_interna, BRANCO, rect_player, 1)
 
-            # Afiada
             for afiada in afiadas:
                 cx, cy = int(afiada['x']), int(afiada['y'])
                 r = afiada['raio']
@@ -1467,7 +1486,6 @@ while True:
                 pygame.draw.circle(tela_interna, PRETO, (cx, cy), 6)
                 pygame.draw.circle(tela_interna, cor_olho, (cx, cy), 3)
 
-            # Lovers.exe
             if estado_lovers in [
                 'FADE_IN',
                 'CORACAO_INTEIRO',
@@ -1535,7 +1553,6 @@ while True:
 
                 tela_interna.blit(surf_lovers, (lovers_x - 4, lovers_y - 4))
 
-        # CAMADA 3: Overlays / Interface
         if estado_jogo == 'SELECAO' and not animando_consumo:
             pygame.draw.rect(
                 tela_interna, VERDE_GRADE, (grade_x, 30, 6, 130), 2
@@ -1553,38 +1570,24 @@ while True:
                 txt_mod = fonte_m.render(opcoes_grade[i], True, BRANCO)
                 tela_interna.blit(txt_mod, (grade_x + 8, y_linha - 15))
 
+        # MIRA DO DISPARADOR
         if (
             estado_disparo in ['SEGUINDO', 'TRAVADO_PISCANDO', 'ATIRANDO']
             and not animando_consumo
         ):
-            cor_mira = VERMELHO
-            if estado_disparo == 'TRAVADO_PISCANDO':
-                cor_mira = (
-                    AMARELO if (tempo_piscada // 4) % 2 == 0 else VERMELHO
+            if frames_mira_disparador:
+                if estado_disparo == 'SEGUINDO':
+                    sprite_mira_atual = frames_mira_disparador[0]
+                elif estado_disparo == 'TRAVADO_PISCANDO':
+                    index_piscada = 1 if (tempo_piscada // 4) % 2 == 0 else 2
+                    sprite_mira_atual = frames_mira_disparador[index_piscada]
+                elif estado_disparo == 'ATIRANDO':
+                    sprite_mira_atual = frames_mira_disparador[3]
+
+                rect_mira_surf = sprite_mira_atual.get_rect(
+                    center=(int(mira_x), int(mira_y))
                 )
-            elif estado_disparo == 'ATIRANDO':
-                cor_mira = BRANCO
-
-            if mira_x <= limite_caos and estado_disparo != 'TRAVADO_PISCANDO':
-                cor_mira = ROXO_CAOS
-
-            surf_mira = pygame.Surface((30, 30), pygame.SRCALPHA)
-            cx, cy = 15, 15
-            pygame.draw.circle(surf_mira, cor_mira, (cx, cy), 10, 1)
-            pygame.draw.line(
-                surf_mira, cor_mira, (cx - 14, cy), (cx + 14, cy), 1
-            )
-            pygame.draw.line(
-                surf_mira, cor_mira, (cx, cy - 14), (cx, cy + 14), 1
-            )
-
-            if angulo_mira != 0:
-                surf_mira = pygame.transform.rotate(surf_mira, angulo_mira)
-
-            rect_mira_surf = surf_mira.get_rect(
-                center=(int(mira_x), int(mira_y))
-            )
-            tela_interna.blit(surf_mira, rect_mira_surf)
+                tela_interna.blit(sprite_mira_atual, rect_mira_surf)
 
         if barra_amaldicoada_ativa and not animando_consumo:
             fator = barra_amaldicoada_nivel / 100.0

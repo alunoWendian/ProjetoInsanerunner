@@ -4,7 +4,6 @@ import sqlite3
 import sys
 import pygame
 
-
 # ==========================================
 # 1. BANCO DE DADOS (SQLite)
 # ==========================================
@@ -33,10 +32,17 @@ def salvar_pontuacao(nome, pontos):
 
 
 # ==========================================
-# 2. CONFIGURAÇÕES DO JOGO
+# 2. CONFIGURAÇÕES DO JOGO E JOYSTICK
 # ==========================================
 pygame.init()
+pygame.joystick.init()
 init_db()
+
+joysticks = []
+for i in range(pygame.joystick.get_count()):
+    j = pygame.joystick.Joystick(i)
+    j.init()
+    joysticks.append(j)
 
 LARGURA, ALTURA = 320, 180
 LARGURA_TELA, ALTURA_TELA = 800, 600
@@ -77,51 +83,56 @@ VERDE_GRAMA = (120, 190, 110)
 AZUL_JOGADOR_MENU = (80, 100, 120)
 
 # ==========================================
-# CARREGAMENTO DE ASSETS (DISPARADOR E MIRA)
+# CARREGAMENTO DE ASSETS (RECORTE PRECISO)
 # ==========================================
 frames_disparador_normal = []
 frames_disparador_mira = []
 frames_mira_disparador = []
 
-# Asset 1: Disparador
 try:
-    sprite_disparador_sheet = pygame.image.load(
-        'Assets/Sprites/disparador.png'
-    ).convert_alpha()
-    w_sheet = sprite_disparador_sheet.get_width()
-    h_sheet = sprite_disparador_sheet.get_height()
+    sprite_disparador_sheet = pygame.image.load('Assets/Sprites/disparador.png').convert_alpha()
 
-    # Cada frame tem 1/4 da largura e 1/2 da altura total da folha
-    w_frame = w_sheet // 4
-    h_frame = h_sheet // 2
+    # Dimensões exatas calculadas dinamicamente
+    largura_sheet = sprite_disparador_sheet.get_width()
+    altura_sheet = sprite_disparador_sheet.get_height()
+    
+    LARGURA_FRAME_ORIGINAL = largura_sheet // 4
+    ALTURA_FRAME_ORIGINAL = altura_sheet // 2
+    ALTURA_ALVO_JOGO = 36
 
-    # ESCALA MANTENDO PROPORÇÃO ORIGINAL (Ex: 0.5 para dar profundidade na HUD)
-    ESCALA_DISPARADOR = 0.5
-    largura_reduzida = int(w_frame * ESCALA_DISPARADOR)
-    altura_reduzida = int(h_frame * ESCALA_DISPARADOR)
+    def processar_linha_sprite(linha_index):
+        frames = []
+        for col in range(4):
+            x = col * LARGURA_FRAME_ORIGINAL
+            y = linha_index * ALTURA_FRAME_ORIGINAL
+            
+            # Garantia contra overflow de limites
+            w = min(LARGURA_FRAME_ORIGINAL, largura_sheet - x)
+            h = min(ALTURA_FRAME_ORIGINAL, altura_sheet - y)
 
-    # Linha 0 (Neutra - Sem Olho Vermelho)
-    for i in range(4):
-        sub = sprite_disparador_sheet.subsurface(
-            (i * w_frame, 0, w_frame, h_frame)
-        )
-        frames_disparador_normal.append(
-            pygame.transform.scale(sub, (largura_reduzida, altura_reduzida))
-        )
+            rect_sub = pygame.Rect(x, y, w, h)
+            sub_surface = sprite_disparador_sheet.subsurface(rect_sub)
+            
+            bbox = sub_surface.get_bounding_box()
+            if bbox.width > 0 and bbox.height > 0:
+                frame_limpo = sub_surface.subsurface(bbox)
+                fator_bbox = ALTURA_ALVO_JOGO / float(bbox.height)
+                largura_final = max(1, int(bbox.width * fator_bbox))
+                frame_escalado = pygame.transform.scale(frame_limpo, (largura_final, ALTURA_ALVO_JOGO))
+                frames.append(frame_escalado)
+            else:
+                frame_escalado = pygame.transform.scale(sub_surface, (ALTURA_ALVO_JOGO, ALTURA_ALVO_JOGO))
+                frames.append(frame_escalado)
+        return frames
 
-    # Linha 1 (Mirando / Atacando - Com Olho Vermelho)
-    for i in range(4):
-        sub = sprite_disparador_sheet.subsurface(
-            (i * w_frame, h_frame, w_frame, h_frame)
-        )
-        frames_disparador_mira.append(
-            pygame.transform.scale(sub, (largura_reduzida, altura_reduzida))
-        )
+    # Linha 0 = Sem Mira (Normal), Linha 1 = Mirando
+    frames_disparador_normal = processar_linha_sprite(0)
+    frames_disparador_mira = processar_linha_sprite(1)
 
 except Exception as e:
     print(f'Aviso: Erro ao carregar Assets/Sprites/disparador.png ({e})')
 
-# Asset 2: Mira do Disparador (1.5x Maior)
+# Asset 2: Mira do Disparador
 try:
     sprite_mira_sheet = pygame.image.load(
         'Assets/Sprites/MiraDisparador.png'
@@ -240,7 +251,7 @@ mira_x, mira_y = 0, 0
 temporizador_disparo = 0
 estado_disparo = 'DESATIVADO'
 tempo_piscada = 0
-frame_disparador_counter = 0  # Contador contínuo para a animação do disparador
+frame_disparador_counter = 0
 
 lovers_ativa = False
 lovers_x, lovers_y = 0, 0
@@ -280,6 +291,7 @@ barra_amaldicoada_velocidade = 0.08
 afiadas = []
 timer_proxima_afiada = 0
 
+analogue_trava_vertical = False
 
 def reiniciar_todas_variaveis():
     global game_over, animando_consumo, tropecos, tempo_invencivel, debuff_movimento_timer
@@ -363,12 +375,50 @@ while True:
     relogio.tick(60)
     teclas = pygame.key.get_pressed()
 
-    # Atualiza o contador geral de frames da animação
     frame_disparador_counter += 1
-    # Muda o frame da spritesheet a cada 8 ticks do Pygame
-    idx_disp_anim = (frame_disparador_counter // 8) % 4
+    idx_disp_anim = (frame_disparador_counter // 8) % max(1, len(frames_disparador_normal))
 
     acao_jogador_frame = None
+
+    mover_cima = False
+    mover_baixo = False
+    mover_esquerda = False
+    mover_direita = False
+    botao_pulo = False
+    botao_deslize = False
+    botao_start = False
+
+    for event_joy in pygame.event.get(pygame.JOYDEVICEADDED):
+        j = pygame.joystick.Joystick(event_joy.device_index)
+        j.init()
+        joysticks.append(j)
+
+    for joystick in joysticks:
+        axis_y = joystick.get_axis(1) if joystick.get_numaxes() > 1 else 0
+        axis_x = joystick.get_axis(0) if joystick.get_numaxes() > 0 else 0
+        
+        hat = joystick.get_hat(0) if joystick.get_numhats() > 0 else (0, 0)
+
+        if axis_y < -0.5 or hat[1] == 1:
+            mover_cima = True
+        elif axis_y > 0.5 or hat[1] == -1:
+            mover_baixo = True
+
+        if axis_x < -0.5 or hat[0] == -1:
+            mover_esquerda = True
+        elif axis_x > 0.5 or hat[0] == 1:
+            mover_direita = True
+
+        num_buttons = joystick.get_numbuttons()
+        if num_buttons > 0 and joystick.get_button(0):
+            botao_pulo = True
+        if (num_buttons > 1 and joystick.get_button(1)) or (num_buttons > 2 and joystick.get_button(2)):
+            botao_deslize = True
+        if num_buttons > 7 and joystick.get_button(7):
+            botao_start = True
+
+    if not (mover_cima or mover_baixo):
+        analogue_trava_vertical = False
 
     for evento in pygame.event.get():
         if evento.type == pygame.QUIT:
@@ -377,36 +427,61 @@ while True:
 
         if evento.type == pygame.KEYDOWN:
             if estado_jogo == 'MENU':
-                if evento.key == pygame.K_SPACE or evento.key == pygame.K_RETURN:
+                if evento.key in (pygame.K_SPACE, pygame.K_RETURN):
                     estado_jogo = 'TRANSICAO'
                     timer_transicao = DURACAO_TRANSICAO
                     reiniciar_todas_variaveis()
             elif not game_over and estado_jogo != 'TRANSICAO':
-                if (
-                    evento.key == pygame.K_UP or evento.key == pygame.K_w
-                ) and linha_atual > 0:
+                if (evento.key in (pygame.K_UP, pygame.K_w)) and linha_atual > 0:
                     linha_atual -= 1
                     acao_jogador_frame = 'MOVER'
-                if (
-                    (evento.key == pygame.K_DOWN or evento.key == pygame.K_s)
-                    and linha_atual < 2
-                    and not deslizando
-                ):
+                if (evento.key in (pygame.K_DOWN, pygame.K_s)) and linha_atual < 2 and not deslizando:
                     linha_atual += 1
                     acao_jogador_frame = 'MOVER'
 
-                if (
-                    evento.key == pygame.K_SPACE
-                    and not pulo
-                    and not deslizando
-                    and debuff_movimento_timer <= 0
-                ):
+                if (evento.key == pygame.K_SPACE) and not pulo and not deslizando and debuff_movimento_timer <= 0:
                     pulo = True
                     vel_pulo = -5.5
                     acao_jogador_frame = 'PULAR'
             else:
                 if evento.key == pygame.K_r and game_over:
                     estado_jogo = 'MENU'
+
+        elif evento.type == pygame.JOYBUTTONDOWN:
+            if estado_jogo == 'MENU':
+                if evento.button in (0, 7):
+                    estado_jogo = 'TRANSICAO'
+                    timer_transicao = DURACAO_TRANSICAO
+                    reiniciar_todas_variaveis()
+            elif not game_over and estado_jogo != 'TRANSICAO':
+                if evento.button == 0 and not pulo and not deslizando and debuff_movimento_timer <= 0:
+                    pulo = True
+                    vel_pulo = -5.5
+                    acao_jogador_frame = 'PULAR'
+            else:
+                if (evento.button in (0, 7)) and game_over:
+                    estado_jogo = 'MENU'
+
+    if estado_jogo == 'MENU' and botao_start:
+        estado_jogo = 'TRANSICAO'
+        timer_transicao = DURACAO_TRANSICAO
+        reiniciar_todas_variaveis()
+
+    elif not game_over and estado_jogo != 'TRANSICAO':
+        if not analogue_trava_vertical:
+            if mover_cima and linha_atual > 0:
+                linha_atual -= 1
+                acao_jogador_frame = 'MOVER'
+                analogue_trava_vertical = True
+            elif mover_baixo and linha_atual < 2 and not deslizando:
+                linha_atual += 1
+                acao_jogador_frame = 'MOVER'
+                analogue_trava_vertical = True
+
+        if botao_pulo and not pulo and not deslizando and debuff_movimento_timer <= 0:
+            pulo = True
+            vel_pulo = -5.5
+            acao_jogador_frame = 'PULAR'
 
     if estado_jogo == 'TRANSICAO':
         timer_transicao -= 1
@@ -432,14 +507,11 @@ while True:
         y_base_player = LINHAS_Y[linha_atual]
 
         if (
-            (
-                teclas[pygame.K_LSHIFT]
-                or teclas[pygame.K_RSHIFT]
-                or teclas[pygame.K_c]
-            )
-            and not pulo
-            and debuff_movimento_timer <= 0
-        ):
+            teclas[pygame.K_LSHIFT]
+            or teclas[pygame.K_RSHIFT]
+            or teclas[pygame.K_c]
+            or botao_deslize
+        ) and not pulo and debuff_movimento_timer <= 0:
             if not deslizando:
                 acao_jogador_frame = 'DESLIZAR'
                 boost_deslize = 2.8
@@ -458,9 +530,9 @@ while True:
             player_offset_x, y_player, player_largura, h_player
         )
 
-        if teclas[pygame.K_LEFT] or teclas[pygame.K_a]:
+        if teclas[pygame.K_LEFT] or teclas[pygame.K_a] or mover_esquerda:
             player_offset_x -= 1.8
-        if teclas[pygame.K_RIGHT] or teclas[pygame.K_d]:
+        if teclas[pygame.K_RIGHT] or teclas[pygame.K_d] or mover_direita:
             player_offset_x += 1.8
 
         player_offset_x = max(20, min(LARGURA - 30, player_offset_x))
@@ -499,9 +571,7 @@ while True:
 
             if pontos >= proximo_gatilho_pontos:
                 disponiveis = [
-                    m
-                    for m in TODOS_MODIFICADORES
-                    if m not in modificadores_ativos
+                    m for m in TODOS_MODIFICADORES if m not in modificadores_ativos
                 ]
 
                 if len(disponiveis) < 3:
@@ -553,7 +623,7 @@ while True:
                         'trocou_linha': False,
                     }
 
-                    if tipo == 'pedra_normal' or tipo == 'las_pragas':
+                    if tipo in ('pedra_normal', 'las_pragas'):
                         dados_obs.update({'largura': 14, 'altura': 10})
                     elif tipo == 'pedra_grande':
                         dados_obs.update({'largura': 16, 'altura': 50})
@@ -580,6 +650,7 @@ while True:
                 if escolha == 'DISPARADOR':
                     disparador_ativo = True
                     temporizador_disparo = 100
+                    estado_disparo = 'DESATIVADO'
                 elif escolha == 'LOVERS.EXE':
                     lovers_ativa = True
                     timer_lovers = 60
@@ -670,11 +741,11 @@ while True:
                             obs['altura'],
                         )
                         if sensor_rect.colliderect(obs_rect):
-                            if obs['tipo'] in [
+                            if obs['tipo'] in (
                                 'pedra_normal',
                                 'las_pragas',
                                 'caranguejo_mina',
-                            ]:
+                            ):
                                 if not sob['pulo'] and not sob['deslizando']:
                                     sob['pulo'] = True
                                     sob['vel_pulo'] = -5.5
@@ -684,9 +755,7 @@ while True:
                                     sob['timer_deslize'] = 25
                             elif obs['tipo'] == 'pedra_grande':
                                 if sob['cd_troca_linha'] <= 0:
-                                    if sob['linha'] == 0:
-                                        sob['linha'] = 1
-                                    elif sob['linha'] == 2:
+                                    if sob['linha'] in (0, 2):
                                         sob['linha'] = 1
                                     elif sob['linha'] == 1:
                                         sob['linha'] = random.choice([0, 2])
@@ -958,7 +1027,6 @@ while True:
                         mestre_ordem_ativa = False
                         mestre_timer = random.randint(350, 550)
 
-        # LÓGICA DO DISPARADOR
         if disparador_ativo and not animando_consumo:
             temporizador_disparo -= 1
 
@@ -966,6 +1034,7 @@ while True:
                 if temporizador_disparo <= 0:
                     estado_disparo = 'SEGUINDO'
                     temporizador_disparo = 90
+                    mira_x, mira_y = rect_player.centerx, rect_player.centery
 
             elif estado_disparo == 'SEGUINDO':
                 mira_x += (rect_player.centerx - mira_x) * 0.12
@@ -1087,17 +1156,17 @@ while True:
         fonte_info = pygame.font.SysFont(None, 11)
 
         txt_titulo = fonte_titulo.render('INSANE RUNNER', True, PRETO)
-        txt_sub = fonte_sub.render('PRESSIONE ESPAÇO PARA COMEÇAR', True, PRETO)
+        txt_sub = fonte_sub.render('PRESSIONE ESPAÇO / START PARA COMEÇAR', True, PRETO)
 
         txt_ctrl1 = fonte_info.render(
-            'W/S ou SETAS : Trocar de Linha', True, (60, 60, 70)
+            'W/S / D-Pad : Trocar de Linha', True, (60, 60, 70)
         )
         txt_ctrl2 = fonte_info.render(
-            'A/D ou SETAS LATERAIS : Mover-se', True, (60, 60, 70)
+            'A/D / Analógico : Mover-se', True, (60, 60, 70)
         )
-        txt_ctrl3 = fonte_info.render('ESPAÇO : Pular', True, (60, 60, 70))
+        txt_ctrl3 = fonte_info.render('ESPAÇO / Botão A : Pular', True, (60, 60, 70))
         txt_ctrl4 = fonte_info.render(
-            'SHIFT / C : Deslizar', True, (60, 60, 70)
+            'SHIFT / C / Botão B : Deslizar', True, (60, 60, 70)
         )
 
         tela_interna.blit(
@@ -1247,20 +1316,18 @@ while True:
                     cor_sob = AZUL_SOBREVIVENTE
                     pygame.draw.rect(tela_interna, cor_sob, rect_sob)
 
-            # RENDERIZAÇÃO CORRIGIDA DO DISPARADOR NA HUD
             if disparador_ativo:
-                if frames_disparador_normal and frames_disparador_mira:
-                    # Seleção da lista de frames baseada na fase de ataque
-                    if estado_disparo in [
-                        'SEGUINDO',
-                        'TRAVADO_PISCANDO',
-                        'ATIRANDO',
-                    ]:
-                        sprite_atual = frames_disparador_mira[idx_disp_anim]
-                    else:
-                        sprite_atual = frames_disparador_normal[idx_disp_anim]
+                lista_sprites = (
+                    frames_disparador_mira
+                    if estado_disparo in ['SEGUINDO', 'TRAVADO_PISCANDO', 'ATIRANDO']
+                    else frames_disparador_normal
+                )
 
-                    tela_interna.blit(sprite_atual, (LARGURA - 38, 5))
+                if lista_sprites:
+                    sprite_atual = lista_sprites[idx_disp_anim % len(lista_sprites)]
+                    pos_disp_x = LARGURA - sprite_atual.get_width() - 8
+                    pos_disp_y = 5
+                    tela_interna.blit(sprite_atual, (pos_disp_x, pos_disp_y))
 
             for obs in obstaculos:
                 y_visivel_base = obs['y_atual'] - obs['offset_y']
@@ -1570,7 +1637,6 @@ while True:
                 txt_mod = fonte_m.render(opcoes_grade[i], True, BRANCO)
                 tela_interna.blit(txt_mod, (grade_x + 8, y_linha - 15))
 
-        # MIRA DO DISPARADOR
         if (
             estado_disparo in ['SEGUINDO', 'TRAVADO_PISCANDO', 'ATIRANDO']
             and not animando_consumo
@@ -1675,7 +1741,7 @@ while True:
 
             txt_go = fonte.render('O CAOS TE ENGOLIU!', True, ROXO_CAOS)
             txt_re = fonte.render(
-                "Pressione 'R' para voltar ao Menu", True, BRANCO
+                "Pressione 'R' ou Botão A/Start para voltar", True, BRANCO
             )
 
             tela_interna.blit(

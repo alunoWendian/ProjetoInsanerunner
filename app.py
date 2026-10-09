@@ -2,6 +2,7 @@ import math
 import random
 import sqlite3
 import sys
+from datetime import datetime
 import pygame
 
 # ==========================================
@@ -10,11 +11,15 @@ import pygame
 def init_db():
     conn = sqlite3.connect('leaderboard.db')
     cursor = conn.cursor()
+    
+    # Recria a tabela para garantir a estrutura completa
+    cursor.execute('DROP TABLE IF EXISTS placar')
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS placar (
+        CREATE TABLE placar (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome TEXT NOT NULL,
-            pontos INTEGER NOT NULL
+            nome VARCHAR(20) NOT NULL,
+            pontos INTEGER NOT NULL,
+            data_pontuacao DATETIME NOT NULL
         )
     ''')
     conn.commit()
@@ -24,11 +29,28 @@ def init_db():
 def salvar_pontuacao(nome, pontos):
     conn = sqlite3.connect('leaderboard.db')
     cursor = conn.cursor()
+    
+    data_atual = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
     cursor.execute(
-        'INSERT INTO placar (nome, pontos) VALUES (?, ?)', (nome, pontos)
+        'INSERT INTO placar (nome, pontos, data_pontuacao) VALUES (?, ?, ?)',
+        (nome, pontos, data_atual)
     )
     conn.commit()
     conn.close()
+
+
+def buscar_top_placar(limite=5):
+    """Busca os melhores jogadores ordenados pela maior pontuação."""
+    conn = sqlite3.connect('leaderboard.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT nome, pontos FROM placar ORDER BY pontos DESC LIMIT ?',
+        (limite,)
+    )
+    top_jogadores = cursor.fetchall()
+    conn.close()
+    return top_jogadores
 
 
 # ==========================================
@@ -36,7 +58,7 @@ def salvar_pontuacao(nome, pontos):
 # ==========================================
 pygame.init()
 pygame.joystick.init()
-init_db()
+init_db()  # Reseta e inicializa a nova estrutura do banco de dados
 
 joysticks = []
 for i in range(pygame.joystick.get_count()):
@@ -82,8 +104,12 @@ AZUL_CEU = (210, 230, 245)
 VERDE_GRAMA = (120, 190, 110)
 AZUL_JOGADOR_MENU = (80, 100, 120)
 
+# Variáveis para a digitação do nome no Game Over
+nome_jogador = ""
+max_letras_nome = 12
+
 # ==========================================
-# CARREGAMENTO DE ASSETS (RECORTE PRECISO)
+# CARREGAMENTO DE ASSETS
 # ==========================================
 frames_disparador_normal = []
 frames_disparador_mira = []
@@ -91,69 +117,54 @@ frames_mira_disparador = []
 
 try:
     sprite_disparador_sheet = pygame.image.load('Assets/Sprites/disparador.png').convert_alpha()
+    w_frame_orig = 64
+    h_frame_orig = 64
+    tamanho_exibicao = (32, 32)
 
-    # Dimensões exatas calculadas dinamicamente
-    largura_sheet = sprite_disparador_sheet.get_width()
-    altura_sheet = sprite_disparador_sheet.get_height()
-    
-    LARGURA_FRAME_ORIGINAL = largura_sheet // 4
-    ALTURA_FRAME_ORIGINAL = altura_sheet // 2
-    ALTURA_ALVO_JOGO = 36
-
-    def processar_linha_sprite(linha_index):
-        frames = []
-        for col in range(4):
-            x = col * LARGURA_FRAME_ORIGINAL
-            y = linha_index * ALTURA_FRAME_ORIGINAL
-            
-            # Garantia contra overflow de limites
-            w = min(LARGURA_FRAME_ORIGINAL, largura_sheet - x)
-            h = min(ALTURA_FRAME_ORIGINAL, altura_sheet - y)
-
-            rect_sub = pygame.Rect(x, y, w, h)
-            sub_surface = sprite_disparador_sheet.subsurface(rect_sub)
-            
-            bbox = sub_surface.get_bounding_box()
-            if bbox.width > 0 and bbox.height > 0:
-                frame_limpo = sub_surface.subsurface(bbox)
-                fator_bbox = ALTURA_ALVO_JOGO / float(bbox.height)
-                largura_final = max(1, int(bbox.width * fator_bbox))
-                frame_escalado = pygame.transform.scale(frame_limpo, (largura_final, ALTURA_ALVO_JOGO))
-                frames.append(frame_escalado)
-            else:
-                frame_escalado = pygame.transform.scale(sub_surface, (ALTURA_ALVO_JOGO, ALTURA_ALVO_JOGO))
-                frames.append(frame_escalado)
-        return frames
-
-    # Linha 0 = Sem Mira (Normal), Linha 1 = Mirando
-    frames_disparador_normal = processar_linha_sprite(0)
-    frames_disparador_mira = processar_linha_sprite(1)
-
+    for col in range(4):
+        f_norm = sprite_disparador_sheet.subsurface((col * w_frame_orig, 0, w_frame_orig, h_frame_orig))
+        f_mira = sprite_disparador_sheet.subsurface((col * w_frame_orig, h_frame_orig, w_frame_orig, h_frame_orig))
+        
+        frames_disparador_normal.append(pygame.transform.scale(f_norm, tamanho_exibicao))
+        frames_disparador_mira.append(pygame.transform.scale(f_mira, tamanho_exibicao))
 except Exception as e:
     print(f'Aviso: Erro ao carregar Assets/Sprites/disparador.png ({e})')
 
-# Asset 2: Mira do Disparador
 try:
-    sprite_mira_sheet = pygame.image.load(
-        'Assets/Sprites/MiraDisparador.png'
-    ).convert_alpha()
+    sprite_mira_sheet = pygame.image.load('Assets/Sprites/MiraDisparador.png').convert_alpha()
     w_mira = sprite_mira_sheet.get_width()
-    h_frame_mira = sprite_mira_sheet.get_height() // 4
-
-    ESCALA_MIRA = 1.5
-    NOVA_LARGURA_MIRA = int(w_mira * ESCALA_MIRA)
-    NOVA_ALTURA_MIRA = int(h_frame_mira * ESCALA_MIRA)
+    h_mira_frame = sprite_mira_sheet.get_height() // 4
 
     for i in range(4):
-        sub_mira = sprite_mira_sheet.subsurface(
-            (0, i * h_frame_mira, w_mira, h_frame_mira)
-        )
-        mira_escalada = pygame.transform.scale(
-            sub_mira, (NOVA_LARGURA_MIRA, NOVA_ALTURA_MIRA)
-        )
-        frames_mira_disparador.append(mira_escalada)
+        sub_mira = sprite_mira_sheet.subsurface((0, i * h_mira_frame, w_mira, h_mira_frame))
+        mira_ampliada = pygame.transform.scale(sub_mira, (48, 48))
+        frames_mira_disparador.append(mira_ampliada)
 except Exception as e:
     print(f'Aviso: Erro ao carregar Assets/Sprites/MiraDisparador.png ({e})')
+
+sprite_pedra_normal = None
+sprite_pedra_grande = None
+sprite_pedra_deslize = None
+
+try:
+    sheet_pedras = pygame.image.load('Assets/Sprites/pedras.png').convert_alpha()
+    w_pedras = sheet_pedras.get_width()
+    h_pedras_total = sheet_pedras.get_height()
+    h_cada_pedra = h_pedras_total // 3
+
+    sprite_pedra_normal = sheet_pedras.subsurface((0, 0, w_pedras, h_cada_pedra))
+    sprite_pedra_grande = sheet_pedras.subsurface((0, h_cada_pedra, w_pedras, h_cada_pedra))
+    sprite_pedra_deslize = sheet_pedras.subsurface((0, h_cada_pedra * 2, w_pedras, h_cada_pedra))
+
+    if sprite_pedra_normal:
+        sprite_pedra_normal = pygame.transform.scale(sprite_pedra_normal, (20, 16))
+    if sprite_pedra_grande:
+        sprite_pedra_grande = pygame.transform.scale(sprite_pedra_grande, (30, 40))
+    if sprite_pedra_deslize:
+        sprite_pedra_deslize = pygame.transform.scale(sprite_pedra_deslize, (28, 26))
+
+except Exception as e:
+    print(f'Aviso: Erro ao carregar Assets/Sprites/pedras.png ({e})')
 
 # ==========================================
 # 3. LINHAS E VARIÁVEIS DO JOGO
@@ -302,10 +313,11 @@ def reiniciar_todas_variaveis():
     global estado_lovers, robert_ativo, las_pragas_ativo, caranguejo_mina_ativo
     global revenger_ativo, sobreviventes_ativo, revenger_estado, revenger_angulo
     global mestre_ativo, mestre_ordem_ativa, mestre_estado, barra_amaldicoada_ativa
-    global barra_amaldicoada_nivel, pos_caos_transicao
+    global barra_amaldicoada_nivel, pos_caos_transicao, nome_jogador
 
     game_over = False
     animando_consumo = False
+    nome_jogador = ""
     tropecos = 0
     tempo_invencivel = 0
     debuff_movimento_timer = 0
@@ -376,8 +388,6 @@ while True:
     teclas = pygame.key.get_pressed()
 
     frame_disparador_counter += 1
-    idx_disp_anim = (frame_disparador_counter // 8) % max(1, len(frames_disparador_normal))
-
     acao_jogador_frame = None
 
     mover_cima = False
@@ -431,6 +441,18 @@ while True:
                     estado_jogo = 'TRANSICAO'
                     timer_transicao = DURACAO_TRANSICAO
                     reiniciar_todas_variaveis()
+
+            elif game_over:
+                if evento.key == pygame.K_RETURN:
+                    nome_final = nome_jogador.strip() if nome_jogador.strip() else 'Jogador'
+                    salvar_pontuacao(nome_final, pontos)
+                    estado_jogo = 'MENU'
+                elif evento.key == pygame.K_BACKSPACE:
+                    nome_jogador = nome_jogador[:-1]
+                else:
+                    if len(nome_jogador) < max_letras_nome and evento.unicode.isprintable():
+                        nome_jogador += evento.unicode
+
             elif not game_over and estado_jogo != 'TRANSICAO':
                 if (evento.key in (pygame.K_UP, pygame.K_w)) and linha_atual > 0:
                     linha_atual -= 1
@@ -443,9 +465,6 @@ while True:
                     pulo = True
                     vel_pulo = -5.5
                     acao_jogador_frame = 'PULAR'
-            else:
-                if evento.key == pygame.K_r and game_over:
-                    estado_jogo = 'MENU'
 
         elif evento.type == pygame.JOYBUTTONDOWN:
             if estado_jogo == 'MENU':
@@ -453,14 +472,16 @@ while True:
                     estado_jogo = 'TRANSICAO'
                     timer_transicao = DURACAO_TRANSICAO
                     reiniciar_todas_variaveis()
+            elif game_over:
+                if evento.button in (0, 7):
+                    nome_final = nome_jogador.strip() if nome_jogador.strip() else 'Jogador'
+                    salvar_pontuacao(nome_final, pontos)
+                    estado_jogo = 'MENU'
             elif not game_over and estado_jogo != 'TRANSICAO':
                 if evento.button == 0 and not pulo and not deslizando and debuff_movimento_timer <= 0:
                     pulo = True
                     vel_pulo = -5.5
                     acao_jogador_frame = 'PULAR'
-            else:
-                if (evento.button in (0, 7)) and game_over:
-                    estado_jogo = 'MENU'
 
     if estado_jogo == 'MENU' and botao_start:
         estado_jogo = 'TRANSICAO'
@@ -475,7 +496,6 @@ while True:
                 analogue_trava_vertical = True
             elif mover_baixo and linha_atual < 2 and not deslizando:
                 linha_atual += 1
-                acao_jogador_frame = 'MOVER'
                 analogue_trava_vertical = True
 
         if botao_pulo and not pulo and not deslizando and debuff_movimento_timer <= 0:
@@ -613,6 +633,20 @@ while True:
                     )
                     y_inicial = LINHAS_Y[linha_sorteada]
 
+                    w_obs, h_obs = 20, 16
+                    if tipo == 'pedra_grande':
+                        w_obs = 30
+                        h_obs = 40
+                    elif tipo == 'pedra_normal':
+                        w_obs = 20
+                        h_obs = 16
+                    elif tipo == 'pedra_deslize':
+                        w_obs = 28
+                        h_obs = 26
+                    elif tipo == 'las_pragas':
+                        w_obs = 12
+                        h_obs = 10
+
                     dados_obs = {
                         'tipo': tipo,
                         'x': LARGURA + 10,
@@ -621,16 +655,9 @@ while True:
                         'offset_y': 0,
                         'is_robert': eh_robert,
                         'trocou_linha': False,
+                        'largura': w_obs,
+                        'altura': h_obs,
                     }
-
-                    if tipo in ('pedra_normal', 'las_pragas'):
-                        dados_obs.update({'largura': 14, 'altura': 10})
-                    elif tipo == 'pedra_grande':
-                        dados_obs.update({'largura': 16, 'altura': 50})
-                    elif tipo == 'pedra_deslize':
-                        dados_obs.update(
-                            {'largura': 14, 'altura': 40, 'offset_y': 11}
-                        )
 
                     obstaculos.append(dados_obs)
 
@@ -822,18 +849,17 @@ while True:
                         obs['trocou_linha'] = True
 
             if obs['linha'] == linha_atual and not animando_consumo:
-                y_visivel_base = obs['y_atual'] - obs['offset_y']
+                y_visivel_base = LINHAS_Y[obs['linha']]
+                y_obs = y_visivel_base - obs['altura']
 
-                if obs['tipo'] == 'pedra_deslize':
-                    y_obs = y_visivel_base - 18
-                    h_colisao = 18
+                if obs['tipo'] == 'pedra_deslize': 
+                    rect_obs = pygame.Rect(
+                        obs['x'], y_obs - 5, obs['largura'], obs['altura'] - 14
+                    )
                 else:
-                    y_obs = y_visivel_base - obs['altura']
-                    h_colisao = obs['altura']
-
-                rect_obs = pygame.Rect(
-                    obs['x'], y_obs, obs['largura'], h_colisao
-                )
+                    rect_obs = pygame.Rect(
+                        obs['x'], y_obs, obs['largura'], obs['altura']
+                    )
 
                 if rect_player.colliderect(rect_obs):
                     if obs['tipo'] == 'las_pragas':
@@ -855,7 +881,7 @@ while True:
                         obstaculos.remove(obs)
                     continue
 
-            if obs['x'] < -20:
+            if obs['x'] < -50:
                 if obs in obstaculos:
                     obstaculos.remove(obs)
 
@@ -1051,7 +1077,9 @@ while True:
                     estado_disparo = 'ATIRANDO'
 
             elif estado_disparo == 'ATIRANDO':
-                rect_mira = pygame.Rect(mira_x - 12, mira_y - 12, 24, 24)
+                rect_mira = pygame.Rect(
+                    mira_x - 24, mira_y - 24, 48, 48
+                )
                 if rect_player.colliderect(rect_mira):
                     tomar_dano()
 
@@ -1130,7 +1158,6 @@ while True:
             alcance_destruicao_atual += 5
             if alcance_destruicao_atual >= LARGURA:
                 game_over = True
-                salvar_pontuacao('Visitante Feira', pontos)
 
         pulso_caos = (pulso_caos + 0.12) % 8
 
@@ -1147,49 +1174,53 @@ while True:
 
         y_menu_player = LINHAS_Y[1] - player_altura_normal
         rect_player_menu = pygame.Rect(
-            30, y_menu_player, player_largura, player_altura_normal
+            15, y_menu_player, player_largura, player_altura_normal
         )
         pygame.draw.rect(tela_interna, AZUL_JOGADOR_MENU, rect_player_menu)
 
-        fonte_titulo = pygame.font.SysFont(None, 26, bold=True)
-        fonte_sub = pygame.font.SysFont(None, 14)
-        fonte_info = pygame.font.SysFont(None, 11)
+        fonte_titulo = pygame.font.SysFont(None, 24, bold=True)
+        fonte_sub = pygame.font.SysFont(None, 12)
+        fonte_info = pygame.font.SysFont(None, 10)
+        fonte_placar = pygame.font.SysFont(None, 11)
 
         txt_titulo = fonte_titulo.render('INSANE RUNNER', True, PRETO)
         txt_sub = fonte_sub.render('PRESSIONE ESPAÇO / START PARA COMEÇAR', True, PRETO)
 
-        txt_ctrl1 = fonte_info.render(
-            'W/S / D-Pad : Trocar de Linha', True, (60, 60, 70)
-        )
-        txt_ctrl2 = fonte_info.render(
-            'A/D / Analógico : Mover-se', True, (60, 60, 70)
-        )
-        txt_ctrl3 = fonte_info.render('ESPAÇO / Botão A : Pular', True, (60, 60, 70))
-        txt_ctrl4 = fonte_info.render(
-            'SHIFT / C / Botão B : Deslizar', True, (60, 60, 70)
-        )
-
-        tela_interna.blit(
-            txt_titulo, (LARGURA // 2 - txt_titulo.get_width() // 2, 20)
-        )
+        tela_interna.blit(txt_titulo, (LARGURA // 2 - txt_titulo.get_width() // 2, 8))
 
         if (pygame.time.get_ticks() // 400) % 2 == 0:
-            tela_interna.blit(
-                txt_sub, (LARGURA // 2 - txt_sub.get_width() // 2, 50)
-            )
+            tela_interna.blit(txt_sub, (LARGURA // 2 - txt_sub.get_width() // 2, 30))
 
-        tela_interna.blit(
-            txt_ctrl1, (LARGURA // 2 - txt_ctrl1.get_width() // 2, 115)
-        )
-        tela_interna.blit(
-            txt_ctrl2, (LARGURA // 2 - txt_ctrl2.get_width() // 2, 130)
-        )
-        tela_interna.blit(
-            txt_ctrl3, (LARGURA // 2 - txt_ctrl3.get_width() // 2, 145)
-        )
-        tela_interna.blit(
-            txt_ctrl4, (LARGURA // 2 - txt_ctrl4.get_width() // 2, 160)
-        )
+        # --- SEÇÃO LEADERBOARD (PLACAR DE LÍDERES) ---
+        rect_placar_bg = pygame.Rect(180, 48, 130, 115)
+        pygame.draw.rect(tela_interna, (230, 235, 240), rect_placar_bg)
+        pygame.draw.rect(tela_interna, (80, 90, 100), rect_placar_bg, 1)
+
+        txt_head_placar = fonte_placar.render('-- TOP RECORDES --', True, PRETO)
+        tela_interna.blit(txt_head_placar, (rect_placar_bg.x + rect_placar_bg.width // 2 - txt_head_placar.get_width() // 2, rect_placar_bg.y + 4))
+
+        top_scores = buscar_top_placar(5)
+        if top_scores:
+            for idx, (nome_recorde, pts_recorde) in enumerate(top_scores):
+                # Limita o tamanho do nome na tela para não estourar o layout
+                nome_truncado = nome_recorde[:8]
+                str_linha = f"{idx + 1}. {nome_truncado} - {pts_recorde}p"
+                txt_score = fonte_placar.render(str_linha, True, (20, 20, 30))
+                tela_interna.blit(txt_score, (rect_placar_bg.x + 8, rect_placar_bg.y + 20 + (idx * 18)))
+        else:
+            txt_vazio = fonte_placar.render('Sem recordes ainda!', True, (100, 100, 110))
+            tela_interna.blit(txt_vazio, (rect_placar_bg.x + 8, rect_placar_bg.y + 30))
+
+        # --- SEÇÃO DE CONTROLES ---
+        txt_ctrl1 = fonte_info.render('W/S / D-Pad : Trocar de Linha', True, (60, 60, 70))
+        txt_ctrl2 = fonte_info.render('A/D / Analógico : Mover-se', True, (60, 60, 70))
+        txt_ctrl3 = fonte_info.render('ESPAÇO / Botão A : Pular', True, (60, 60, 70))
+        txt_ctrl4 = fonte_info.render('SHIFT / C / Botão B : Deslizar', True, (60, 60, 70))
+
+        tela_interna.blit(txt_ctrl1, (10, 115))
+        tela_interna.blit(txt_ctrl2, (10, 130))
+        tela_interna.blit(txt_ctrl3, (10, 145))
+        tela_interna.blit(txt_ctrl4, (10, 160))
 
     elif estado_jogo == 'TRANSICAO':
         progresso = (DURACAO_TRANSICAO - timer_transicao) / float(
@@ -1324,13 +1355,15 @@ while True:
                 )
 
                 if lista_sprites:
-                    sprite_atual = lista_sprites[idx_disp_anim % len(lista_sprites)]
-                    pos_disp_x = LARGURA - sprite_atual.get_width() - 8
-                    pos_disp_y = 5
-                    tela_interna.blit(sprite_atual, (pos_disp_x, pos_disp_y))
+                    idx_disp_anim = (frame_disparador_counter // 8) % len(lista_sprites)
+                    sprite_orig = lista_sprites[idx_disp_anim]
+
+                    pos_disp_x = LARGURA - sprite_orig.get_width() - 4
+                    pos_disp_y = 4
+                    tela_interna.blit(sprite_orig, (pos_disp_x, pos_disp_y))
 
             for obs in obstaculos:
-                y_visivel_base = obs['y_atual'] - obs['offset_y']
+                y_visivel_base = LINHAS_Y[obs['linha']]
                 no_caos = obs['x'] <= limite_caos
 
                 if obs['tipo'] == 'las_pragas':
@@ -1344,9 +1377,9 @@ while True:
                     )
                     pygame.draw.rect(tela_interna, DESTRUICAO_PRETO, rect_praga)
 
-                    for i in range(3):
+                    for i in range(2):
                         ox = obs['x'] + 2 + (i * 4) + random.randint(-1, 1)
-                        oy = y_obs + 3 + random.randint(-1, 1)
+                        oy = y_obs + 2 + random.randint(-1, 1)
                         cor_olho_p = ROXO_CAOS if no_caos else VERMELHO_OLHO
                         tela_interna.set_at((int(ox), int(oy)), cor_olho_p)
 
@@ -1361,15 +1394,15 @@ while True:
                     pygame.draw.line(
                         tela_interna,
                         BRANCO,
-                        (obs['x'] - 2, y_obs + 2),
-                        (obs['x'], y_obs + 4),
+                        (obs['x'] - 2, y_obs + 1),
+                        (obs['x'], y_obs + 3),
                         1,
                     )
                     pygame.draw.line(
                         tela_interna,
                         BRANCO,
-                        (obs['x'] + obs['largura'], y_obs + 4),
-                        (obs['x'] + obs['largura'] + 2, y_obs + 2),
+                        (obs['x'] + obs['largura'], y_obs + 3),
+                        (obs['x'] + obs['largura'] + 2, y_obs + 1),
                         1,
                     )
                     if (pygame.time.get_ticks() // 150) % 2 == 0:
@@ -1378,37 +1411,49 @@ while True:
                             AMARELO,
                             (
                                 int(obs['x'] + obs['largura'] // 2),
-                                int(y_obs + 2),
+                                int(y_obs + 1),
                             ),
-                            2,
+                            1,
+                        )
+
+                elif obs['tipo'] == 'pedra_normal':
+                    y_obs = y_visivel_base - obs['altura']
+                    if sprite_pedra_normal:
+                        tela_interna.blit(sprite_pedra_normal, (obs['x'], y_obs))
+                    else:
+                        cor_p = ROXO_CAOS if no_caos else CINZA_PEDRA
+                        pygame.draw.rect(
+                            tela_interna,
+                            cor_p,
+                            (obs['x'], y_obs, obs['largura'], obs['altura']),
+                        )
+
+                elif obs['tipo'] == 'pedra_grande':
+                    y_obs = y_visivel_base - obs['altura']
+                    if sprite_pedra_grande:
+                        tela_interna.blit(sprite_pedra_grande, (obs['x'], y_obs))
+                    else:
+                        cor_p = ROXO_CAOS if no_caos else CINZA_PEDRA_GRANDE
+                        pygame.draw.rect(
+                            tela_interna,
+                            cor_p,
+                            (obs['x'], y_obs, obs['largura'], obs['altura']),
                         )
 
                 elif obs['tipo'] == 'pedra_deslize':
-                    y_obs = y_visivel_base - 18
-                    cor_desl = ROXO_CAOS if no_caos else CINZA_PEDRA_DESLIZE
-                    pygame.draw.rect(
-                        tela_interna,
-                        cor_desl,
-                        (obs['x'], y_obs, obs['largura'], 18),
-                    )
-                else:
                     y_obs = y_visivel_base - obs['altura']
-                    cor_p = (
-                        ROXO_CAOS
-                        if no_caos
-                        else (
-                            CINZA_PEDRA_GRANDE
-                            if obs['tipo'] == 'pedra_grande'
-                            else CINZA_PEDRA
+                    if sprite_pedra_deslize:
+                        tela_interna.blit(sprite_pedra_deslize, (obs['x'], y_obs))
+                    else:
+                        cor_desl = ROXO_CAOS if no_caos else CINZA_PEDRA_DESLIZE
+                        pygame.draw.rect(
+                            tela_interna,
+                            cor_desl,
+                            (obs['x'], y_obs, obs['largura'], obs['altura']),
                         )
-                    )
-                    pygame.draw.rect(
-                        tela_interna,
-                        cor_p,
-                        (obs['x'], y_obs, obs['largura'], obs['altura']),
-                    )
 
                 if obs.get('is_robert'):
+                    y_obs = y_visivel_base - obs['altura']
                     post_it_x = obs['x'] + 2
                     post_it_y = y_obs + 2
                     pygame.draw.rect(
@@ -1735,23 +1780,32 @@ while True:
 
         if game_over:
             sombra = pygame.Surface((LARGURA, ALTURA))
-            sombra.set_alpha(220)
+            sombra.set_alpha(230)
             sombra.fill(PRETO)
             tela_interna.blit(sombra, (0, 0))
 
-            txt_go = fonte.render('O CAOS TE ENGOLIU!', True, ROXO_CAOS)
-            txt_re = fonte.render(
-                "Pressione 'R' ou Botão A/Start para voltar", True, BRANCO
-            )
+            fonte_p = pygame.font.SysFont(None, 14)
+            fonte_peq = pygame.font.SysFont(None, 11)
 
-            tela_interna.blit(
-                txt_go,
-                (LARGURA // 2 - txt_go.get_width() // 2, ALTURA // 2 - 15),
-            )
-            tela_interna.blit(
-                txt_re,
-                (LARGURA // 2 - txt_re.get_width() // 2, ALTURA // 2 + 5),
-            )
+            txt_go = fonte.render('O CAOS TE ENGOLIU!', True, ROXO_CAOS)
+            txt_pts = fonte_p.render(f'Pontuação Final: {pontos}', True, BRANCO)
+            txt_digite = fonte_peq.render('DIGITE SEU NOME:', True, AMARELO)
+
+            cursor = "|" if (pygame.time.get_ticks() // 300) % 2 == 0 else ""
+            txt_nome_exibido = fonte_p.render(nome_jogador + cursor, True, VERDE_GRADE)
+
+            txt_instrucao = fonte_peq.render("Pressione ENTER para Salvar e Voltar ao Menu", True, CINZA_JOGADOR)
+
+            tela_interna.blit(txt_go, (LARGURA // 2 - txt_go.get_width() // 2, 25))
+            tela_interna.blit(txt_pts, (LARGURA // 2 - txt_pts.get_width() // 2, 48))
+            tela_interna.blit(txt_digite, (LARGURA // 2 - txt_digite.get_width() // 2, 75))
+
+            rect_caixa_nome = pygame.Rect(LARGURA // 2 - 60, 92, 120, 20)
+            pygame.draw.rect(tela_interna, DESTRUICAO_PRETO, rect_caixa_nome)
+            pygame.draw.rect(tela_interna, BRANCO, rect_caixa_nome, 1)
+
+            tela_interna.blit(txt_nome_exibido, (rect_caixa_nome.x + 8, rect_caixa_nome.y + 4))
+            tela_interna.blit(txt_instrucao, (LARGURA // 2 - txt_instrucao.get_width() // 2, 135))
 
     frame_escalado = pygame.transform.scale(
         tela_interna, (janela.get_width(), janela.get_height())
